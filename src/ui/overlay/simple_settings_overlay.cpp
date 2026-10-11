@@ -2944,7 +2944,12 @@ void SimpleSettingsDialog::OnDraw(ImGuiIO& io) {
         break;
       }
       case RowSpec::kSlider: {
-        float number_w = 52.0f * s;
+        // Room for the widest value (e.g. "100%") plus the knob's overhang.
+        char widest_text[32];
+        std::snprintf(widest_text, sizeof(widest_text), row.fmt, double(row.max));
+        float number_w = std::max(
+            52.0f * s,
+            row_bold->CalcTextSizeA(value_size, FLT_MAX, 0.0f, widest_text).x + 16.0f * s);
         float track_x0 = vx0 + 6.0f * s;
         float track_x1 = vx1 - number_w;
         float t = row.max > row.min ? (*row.value - row.min) / (row.max - row.min) : 0.0f;
