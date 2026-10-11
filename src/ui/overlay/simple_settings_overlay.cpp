@@ -27,6 +27,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/audio/audio_driver.h>
+#include <rex/audio/custom_music.h>
 #include <rex/platform.h>
 #include <rex/ui/presenter.h>
 #include <rex/ui/window.h>
@@ -54,7 +55,7 @@ constexpr std::array<std::string_view, 7> kCoreSimpleSettingsCvars = {
 // Optional cvars persisted when the host defines them (HasCvar-gated: app
 // cvars like the native-renderer knobs don't exist in every embedder, and
 // backend/platform cvars don't exist in every build).
-constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {
+constexpr std::array<std::string_view, 26> kOptionalSimpleSettingsCvars = {
     "skate3_native_render_scene",
     "skate3_native_render_scene_msaa",
     "skate3_native_render_scene_shadows",
@@ -78,6 +79,8 @@ constexpr std::array<std::string_view, 24> kOptionalSimpleSettingsCvars = {
     "input_backend",
     "audio_mute",
     "audio_device_sample_frames",
+    "audio_music_volume",
+    "audio_game_volume",
     "user_language"};
 
 // MSAA sample counts for the native scene renderer.
@@ -1051,6 +1054,12 @@ void SimpleSettingsDialog::LoadSettingsFromCvars() {
                     rex::cvar::Query<bool>("skate3_native_render_mode_indicator");
   fps_counter_ = HasCvar("show_fps_counter") && rex::cvar::Query<bool>("show_fps_counter");
   audio_mute_ = HasCvar("audio_mute") && rex::cvar::Query<bool>("audio_mute");
+  music_volume_ = HasCvar("audio_music_volume")
+                      ? float(std::clamp(rex::cvar::Query<int32_t>("audio_music_volume"), 0, 100))
+                      : 100.0f;
+  game_volume_ = HasCvar("audio_game_volume")
+                     ? float(std::clamp(rex::cvar::Query<int32_t>("audio_game_volume"), 0, 100))
+                     : 100.0f;
   rumble_ = HasCvar("hid_rumble_enabled") && rex::cvar::Query<bool>("hid_rumble_enabled");
   mnk_sensitivity_ = HasCvar("mnk_sensitivity")
                          ? float(std::clamp(rex::cvar::Query<double>("mnk_sensitivity"), 0.1, 5.0))
@@ -1919,6 +1928,56 @@ void SimpleSettingsDialog::BuildRows(std::vector<RowSpec>& rows, int category) {
       break;
     }
     case 2: {  // Audio
+      if (HasCvar("audio_music_volume") || HasCvar("audio_game_volume")) {
+        header("Volume");
+      }
+      if (HasCvar("audio_music_volume")) {
+        RowSpec row;
+        row.kind = RowSpec::kSlider;
+        row.label = "Music Volume";
+        row.desc = "Volume of the soundtrack and your playlist songs. Applies immediately.";
+        if (const uint32_t songs = rex::audio::custom_music::SongCount()) {
+          row.desc_extra = "Custom playlist installed: " + std::to_string(songs) + " songs.";
+        }
+        row.value = &music_volume_;
+        row.min = 0.0f;
+        row.max = 100.0f;
+        row.step = 5.0f;
+        row.fmt = "%.0f%%";
+        row.on_value_change = [this] {
+          music_volume_ = std::clamp(music_volume_, 0.0f, 100.0f);
+          rex::cvar::SetFlagByName("audio_music_volume", std::to_string(int(music_volume_)));
+        };
+        row.reset = [this] {
+          music_volume_ = float(CvarDefaultDouble("audio_music_volume", 100.0));
+          rex::cvar::SetFlagByName("audio_music_volume", std::to_string(int(music_volume_)));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(row));
+      }
+      if (HasCvar("audio_game_volume")) {
+        RowSpec row;
+        row.kind = RowSpec::kSlider;
+        row.label = "Game Volume";
+        row.desc =
+            "Volume of everything except music: skateboard and wheel sounds, sound effects, "
+            "speech and ambience. Applies immediately.";
+        row.value = &game_volume_;
+        row.min = 0.0f;
+        row.max = 100.0f;
+        row.step = 5.0f;
+        row.fmt = "%.0f%%";
+        row.on_value_change = [this] {
+          game_volume_ = std::clamp(game_volume_, 0.0f, 100.0f);
+          rex::cvar::SetFlagByName("audio_game_volume", std::to_string(int(game_volume_)));
+        };
+        row.reset = [this] {
+          game_volume_ = float(CvarDefaultDouble("audio_game_volume", 100.0));
+          rex::cvar::SetFlagByName("audio_game_volume", std::to_string(int(game_volume_)));
+          SaveSimpleSettingsConfig(config_path_);
+        };
+        rows.push_back(std::move(row));
+      }
       header("Output");
       if (HasCvar("audio_mute")) {
         RowSpec row;

@@ -127,6 +127,8 @@ class SimpleSettingsDialog final : public ImGuiDialog {
   bool mode_indicator_ = true;
   bool fps_counter_ = false;
   bool audio_mute_ = false;
+  float music_volume_ = 100.0f;
+  float game_volume_ = 100.0f;
   bool rumble_ = true;
   float mnk_sensitivity_ = 1.0f;
   int chord_index_ = 0;

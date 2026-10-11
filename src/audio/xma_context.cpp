@@ -42,10 +42,45 @@ extern "C" {
 REXCVAR_DEFINE_BOOL(xma_use_old_decoder, true, "Audio",
                     "Use the xenia-edge old XMA decoder path. This avoids Skate 3 one-shot SFX "
                     "crackle caused by the current subframe/frame assembly path.");
+REXCVAR_DEFINE_INT32(audio_music_volume, 100, "Audio",
+                     "Music volume in percent: the soundtrack and custom playlist songs "
+                     "(stereo 44.1 kHz streams).")
+    .range(0, 100);
+REXCVAR_DEFINE_INT32(audio_game_volume, 100, "Audio",
+                     "Game sound volume in percent: skateboard, sound effects, speech and "
+                     "ambience (everything that is not music).")
+    .range(0, 100);
 
 namespace rex::audio {
 
 using stream::BitStream;
+
+namespace {
+
+// Music is streamed as stereo 44.1 kHz XMA; sound effects, speech and ambience use other
+// rates or mono, so this split lets the music and game volume settings work independently.
+bool IsMusicStream(const XMA_CONTEXT_DATA* data) {
+  return data->is_stereo && data->sample_rate == 2;
+}
+
+// Scales a decoded frame (big-endian s16) by the music or game volume setting. A squared
+// curve keeps the slider roughly perceptual: 50% is about -12 dB.
+void ApplyVolume(uint8_t* frame, size_t bytes, bool music) {
+  const int32_t percent =
+      std::clamp(music ? REXCVAR_GET(audio_music_volume) : REXCVAR_GET(audio_game_volume), 0, 100);
+  if (percent >= 100) {
+    return;
+  }
+  const int32_t gain = percent * percent * 32768 / 10000;
+  for (size_t i = 0; i + 1 < bytes; i += 2) {
+    const int16_t sample = int16_t((frame[i] << 8) | frame[i + 1]);
+    const int32_t scaled = (int32_t(sample) * gain) >> 15;
+    frame[i] = uint8_t(uint16_t(scaled) >> 8);
+    frame[i + 1] = uint8_t(scaled);
+  }
+}
+
+}  // namespace
 
 const uint32_t XmaContext::kBitsPerPacketHeader;
 const uint32_t XmaContext::kOutputMaxSizeBytes;
@@ -784,6 +819,8 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
   if (DecodePacket(av_context_, av_packet_, av_frame_)) {
     ConvertFrame(reinterpret_cast<const uint8_t**>(&av_frame_->data), bool(data->is_stereo),
                  raw_frame_.data());
+    ApplyVolume(raw_frame_.data(), size_t(kBytesPerFrameChannel) << data->is_stereo,
+                IsMusicStream(data));
     current_frame_remaining_subframes_ = 4 << data->is_stereo;
 
     // Loop end: limit output to subframes 0..loop_subframe_end.
@@ -1222,7 +1259,9 @@ void XmaContext::DecodeOldFrame(XMA_CONTEXT_DATA* data) {
 
     uint32_t custom_slot = 0;
     int32_t custom_position = 0;
+    bool is_music = IsMusicStream(data);
     if (custom_music::LookupPacket(packet, &custom_slot, &custom_position)) {
+      is_music = true;
       // Tagged playlist packet: play the user's song instead of decoding. A frame continued
       // from the previous packet (frame_idx == -1) is the one just before this packet's first.
       const int32_t frame_position =
@@ -1270,6 +1309,7 @@ void XmaContext::DecodeOldFrame(XMA_CONTEXT_DATA* data) {
                    raw_frame_.data());
     }
 
+    ApplyVolume(raw_frame_.data(), frame_byte_count, is_music);
     output_rb.Write(raw_frame_.data(), frame_byte_count);
     output_remaining_bytes -= frame_byte_count;
     data->output_buffer_write_offset = output_rb.write_offset() / kOutputBytesPerBlock;
