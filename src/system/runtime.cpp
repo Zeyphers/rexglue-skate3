@@ -9,6 +9,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 
+#include <rex/audio/custom_music.h>
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/filesystem/devices/host_path_device.h>
@@ -277,6 +278,7 @@ bool Runtime::SetupVfs() {
   }
 
   auto abs_game_root = std::filesystem::absolute(game_data_root_);
+  audio::custom_music::SetGameRoot(abs_game_root);
   if (!std::filesystem::exists(abs_game_root)) {
     REXSYS_ERROR("Runtime::SetupVfs: game_data_root does not exist: {}", abs_game_root.string());
     return false;

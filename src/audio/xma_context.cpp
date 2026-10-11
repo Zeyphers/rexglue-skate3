@@ -13,6 +13,7 @@
 #include <cstring>
 #include <tuple>
 
+#include <rex/audio/custom_music.h>
 #include <rex/audio/xma/context.h>
 #include <rex/audio/xma/decoder.h>
 #include <rex/audio/xma/helpers.h>
@@ -1219,41 +1220,55 @@ void XmaContext::DecodeOldFrame(XMA_CONTEXT_DATA* data) {
       }
     }
 
-    av_packet_->data = xma_frame_.data();
-    av_packet_->size = static_cast<int>(
-        1 + ((old_split_frame_padding_start_ + old_split_frame_len_) / 8) +
-        (((old_split_frame_padding_start_ + old_split_frame_len_) % 8) ? 1 : 0));
-    const auto padding_end =
-        av_packet_->size * 8 - (8 + old_split_frame_padding_start_ + old_split_frame_len_);
-    if (padding_end >= 8) {
-      return;
-    }
-    xma_frame_[0] =
-        ((old_split_frame_padding_start_ & 7) << 5) | ((padding_end & 7) << 2);
+    uint32_t custom_slot = 0;
+    int32_t custom_position = 0;
+    if (custom_music::LookupPacket(packet, &custom_slot, &custom_position)) {
+      // Tagged playlist packet: play the user's song instead of decoding. A frame continued
+      // from the previous packet (frame_idx == -1) is the one just before this packet's first.
+      const int32_t frame_position =
+          custom_position + (frame_idx >= 0 ? frame_idx : -1) * int32_t(kSamplesPerFrame);
+      old_split_frame_len_ = 0;
+      old_split_frame_len_partial_ = 0;
+      old_split_frame_padding_start_ = 0;
+      custom_music::RenderFrame(custom_slot, frame_position, bool(data->is_stereo),
+                                raw_frame_.data());
+    } else {
+      av_packet_->data = xma_frame_.data();
+      av_packet_->size = static_cast<int>(
+          1 + ((old_split_frame_padding_start_ + old_split_frame_len_) / 8) +
+          (((old_split_frame_padding_start_ + old_split_frame_len_) % 8) ? 1 : 0));
+      const auto padding_end =
+          av_packet_->size * 8 - (8 + old_split_frame_padding_start_ + old_split_frame_len_);
+      if (padding_end >= 8) {
+        return;
+      }
+      xma_frame_[0] =
+          ((old_split_frame_padding_start_ & 7) << 5) | ((padding_end & 7) << 2);
 
-    old_split_frame_len_ = 0;
-    old_split_frame_len_partial_ = 0;
-    old_split_frame_padding_start_ = 0;
+      old_split_frame_len_ = 0;
+      old_split_frame_len_partial_ = 0;
+      old_split_frame_padding_start_ = 0;
 
-    int ret = avcodec_send_packet(av_context_, av_packet_);
-    if (ret < 0) {
-      return;
-    }
-    ret = avcodec_receive_frame(av_context_, av_frame_);
-    if (ret == AVERROR(EAGAIN)) {
-      return;
-    }
-    if (ret < 0) {
-      char errbuf[AV_ERROR_MAX_STRING_SIZE];
-      av_strerror(ret, errbuf, sizeof(errbuf));
-      REXAPU_ERROR("XmaContext {} old: decoding failed: {} ({})", id(), errbuf, ret);
-      data->parser_error_status = 4;
-      SwapInputBuffer(data);
-      return;
-    }
+      int ret = avcodec_send_packet(av_context_, av_packet_);
+      if (ret < 0) {
+        return;
+      }
+      ret = avcodec_receive_frame(av_context_, av_frame_);
+      if (ret == AVERROR(EAGAIN)) {
+        return;
+      }
+      if (ret < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        REXAPU_ERROR("XmaContext {} old: decoding failed: {} ({})", id(), errbuf, ret);
+        data->parser_error_status = 4;
+        SwapInputBuffer(data);
+        return;
+      }
 
-    ConvertFrame(reinterpret_cast<const uint8_t**>(&av_frame_->data), bool(data->is_stereo),
-                 raw_frame_.data());
+      ConvertFrame(reinterpret_cast<const uint8_t**>(&av_frame_->data), bool(data->is_stereo),
+                   raw_frame_.data());
+    }
 
     output_rb.Write(raw_frame_.data(), frame_byte_count);
     output_remaining_bytes -= frame_byte_count;
